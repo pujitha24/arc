@@ -729,6 +729,44 @@ func TestFSMSnapshotRestoreWithFiles(t *testing.T) {
 	}
 }
 
+// TestFSMRestore_FiresDeleteCallbackForDroppedFiles: a snapshot install
+// replaces the manifest without Apply, so the entries it no longer lists must
+// reach the delete callback or the node keeps their replicas (#962).
+func TestFSMRestore_FiresDeleteCallbackForDroppedFiles(t *testing.T) {
+	src := newTestFSM()
+	b := makeFileEntry("db/cpu/b.parquet", "db", "cpu", 200)
+	src.Apply(&raft.Log{Index: 1, Data: makeCommand(t, CommandRegisterFile, RegisterFilePayload{File: b})})
+	snapshot, err := src.Snapshot()
+	if err != nil {
+		t.Fatalf("Snapshot() failed: %v", err)
+	}
+	var buf bytes.Buffer
+	if err := snapshot.Persist(&testSnapshotSink{Writer: &buf}); err != nil {
+		t.Fatalf("Persist() failed: %v", err)
+	}
+
+	fsm := newTestFSM()
+	a := makeFileEntry("db/cpu/a.parquet", "db", "cpu", 100)
+	for i, f := range []FileEntry{a, b} {
+		fsm.Apply(&raft.Log{Index: uint64(i + 1), Data: makeCommand(t, CommandRegisterFile, RegisterFilePayload{File: f})})
+	}
+	var deleted, reasons []string
+	fsm.SetFileCallbacks(nil, func(path, reason string) {
+		deleted = append(deleted, path)
+		reasons = append(reasons, reason)
+	})
+
+	if err := fsm.Restore(io.NopCloser(&buf)); err != nil {
+		t.Fatalf("Restore() failed: %v", err)
+	}
+	if len(deleted) != 1 || deleted[0] != a.Path {
+		t.Fatalf("delete callback fired for %v, want exactly [%s]", deleted, a.Path)
+	}
+	if reasons[0] != "snapshot:removed" {
+		t.Errorf("reason = %q, want snapshot:removed", reasons[0])
+	}
+}
+
 // --- CommandBatchFileOps ---
 
 // makeBatchCommand builds a Raft log data blob for a CommandBatchFileOps.

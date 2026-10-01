@@ -2332,6 +2332,17 @@ func (f *ClusterFSM) Restore(rc io.ReadCloser) error {
 	f.barrierOrder = restoredOrder
 	f.primaryWriterID = snapshot.PrimaryWriterID
 	f.activeCompactorID = snapshot.ActiveCompactorID
+	// Manifest entries the snapshot no longer carries were deleted while this
+	// node was behind. Restore fires no Apply callbacks, so announce them as
+	// deletes or the node keeps replicas the manifest dropped and reads them
+	// (#962). At a startup restore the previous map is empty: a no-op.
+	var removedFiles []string
+	for path := range f.files {
+		if _, stillThere := restoredFiles[path]; !stillThere {
+			removedFiles = append(removedFiles, path)
+		}
+	}
+	sort.Strings(removedFiles) // deterministic delivery order
 	f.files = restoredFiles
 	// Rebuild the database → files secondary index from the restored files
 	f.filesByDB = make(map[string]map[string]struct{}, len(f.files))
@@ -2419,6 +2430,7 @@ func (f *ClusterFSM) Restore(rc io.ReadCloser) error {
 	f.keysCache = nil // invalidate sorted-key cache after snapshot restore
 	onNodeAdded := f.onNodeAdded
 	onNodeRemoved := f.onNodeRemoved
+	onFileDeleted := f.onFileDeleted
 	f.mu.Unlock()
 
 	f.logger.Info().
@@ -2456,6 +2468,11 @@ func (f *ClusterFSM) Restore(rc io.ReadCloser) error {
 	if onNodeRemoved != nil {
 		for _, id := range removedNodes {
 			onNodeRemoved(id)
+		}
+	}
+	if onFileDeleted != nil {
+		for _, path := range removedFiles {
+			onFileDeleted(path, "snapshot:removed")
 		}
 	}
 
