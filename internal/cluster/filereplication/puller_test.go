@@ -3,6 +3,7 @@ package filereplication
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"hash"
@@ -1213,6 +1214,63 @@ func TestPuller_ResumeOnRetry(t *testing.T) {
 	}
 }
 
+// resumeProbe starts a puller over backend and runs tryResumeFromPartial for
+// an entry of size bytes at path.
+func resumeProbe(t *testing.T, backend storage.Backend, path string, size int64) (int64, hash.Hash) {
+	t.Helper()
+	p, err := New(Config{
+		SelfNodeID:   "reader-1",
+		Backend:      backend,
+		Fetcher:      newFakeFetcher(),
+		PeerResolver: staticResolver{},
+		Workers:      1,
+		QueueSize:    8,
+		Logger:       zerolog.Nop(),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	p.Start(context.Background())
+	defer p.Stop()
+	return p.tryResumeFromPartial(zerolog.Nop(), makeEntry(path, "writer-1", size))
+}
+
+// TestPuller_ResumeIgnoresShorterFinalFile pins that a complete final file of
+// a previous (shorter) version is not mistaken for a resumable partial of the
+// new version.
+func TestPuller_ResumeIgnoresShorterFinalFile(t *testing.T) {
+	backend := newFakeBackend()
+	path := "db/cpu/rewritten.parquet"
+	if err := backend.Write(context.Background(), path, []byte("old-version")); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if off, h := resumeProbe(t, backend, path, 40); off != 0 || h != nil {
+		t.Errorf("resume = (%d, %v), want (0, nil): final file must not be a partial", off, h)
+	}
+}
+
+// TestPuller_ResumeUsesStagedPartial pins that the offset and prefix hash
+// come from the .part file, including when a final file also exists.
+func TestPuller_ResumeUsesStagedPartial(t *testing.T) {
+	for _, withFinal := range []bool{false, true} {
+		backend := newFakeBackend()
+		path := "db/cpu/resume_part.parquet"
+		part := []byte("PARTIAL")
+		backend.files[path+".part"] = part
+		if withFinal {
+			backend.files[path] = []byte("old-final-bytes-differ")
+		}
+		off, h := resumeProbe(t, backend, path, 40)
+		if off != int64(len(part)) || h == nil {
+			t.Fatalf("withFinal=%v: resume = (%d, %v), want (%d, hasher)", withFinal, off, h, len(part))
+		}
+		want := sha256.Sum256(part)
+		if !bytes.Equal(h.Sum(nil), want[:]) {
+			t.Errorf("withFinal=%v: prefix hash is not the .part hash", withFinal)
+		}
+	}
+}
+
 // TestPuller_BadOffsetDeletesPartialAndRetries verifies that when the fetcher
 // returns ErrBadOffset, the puller deletes the partial file, increments the
 // bad_offset counter, and continues to retry from zero.
@@ -1300,6 +1358,18 @@ func (b *nonAppendingBackend) Delete(ctx context.Context, path string) error {
 }
 func (b *nonAppendingBackend) Exists(ctx context.Context, path string) (bool, error) {
 	return b.inner.Exists(ctx, path)
+}
+func (b *nonAppendingBackend) StagedSize(ctx context.Context, path string) (int64, error) {
+	return b.inner.StagedSize(ctx, path)
+}
+func (b *nonAppendingBackend) ReadStaged(ctx context.Context, path string, w io.Writer) error {
+	return b.inner.ReadStaged(ctx, path, w)
+}
+func (b *nonAppendingBackend) DeleteStaged(ctx context.Context, path string) error {
+	return b.inner.DeleteStaged(ctx, path)
+}
+func (b *nonAppendingBackend) ListStaged(ctx context.Context, prefix string) ([]storage.ObjectInfo, error) {
+	return b.inner.ListStaged(ctx, prefix)
 }
 func (b *nonAppendingBackend) Close() error       { return nil }
 func (b *nonAppendingBackend) Type() string       { return "non-appending" }

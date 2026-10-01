@@ -1450,8 +1450,16 @@ func (p *Puller) writeFileTail(ctx context.Context, entry *raft.FileEntry, r io.
 // why deleteFile below cannot be called with an unusable key. Both are pinned
 // by a test asserting the backend sees no Delete for a quarantined entry.
 func (p *Puller) tryResumeFromPartial(log zerolog.Logger, entry *raft.FileEntry) (int64, hash.Hash) {
+	// Key the resume off the staged partial only. StatFile prefers a complete
+	// final file, so a shorter final file of the previous version would read as
+	// a resumable partial of the new one. Backends that do not stage (S3,
+	// Azure) never resume.
+	si, ok := p.cfg.Backend.(storage.StagingInspector)
+	if !ok {
+		return 0, nil
+	}
 	statCtx, statCancel := context.WithTimeout(p.ctx, 5*time.Second)
-	partial, statErr := p.cfg.Backend.StatFile(statCtx, entry.Path)
+	partial, statErr := si.StagedSize(statCtx, entry.Path)
 	statCancel()
 	if statErr != nil || partial <= 0 || partial >= entry.SizeBytes {
 		return 0, nil
@@ -1459,12 +1467,16 @@ func (p *Puller) tryResumeFromPartial(log zerolog.Logger, entry *raft.FileEntry)
 
 	h := sha256.New()
 	hashCtx, hashCancel := context.WithTimeout(p.ctx, 30*time.Second)
-	hashErr := p.cfg.Backend.ReadToAt(hashCtx, entry.Path, h, 0)
+	hashErr := si.ReadStaged(hashCtx, entry.Path, h)
 	hashCancel()
 	if hashErr != nil {
 		log.Debug().Err(hashErr).Str("path", entry.Path).
 			Msg("Failed to hash partial file prefix; retrying from zero")
-		p.deleteFile(log, entry.Path)
+		delCtx, delCancel := context.WithTimeout(p.ctx, 5*time.Second)
+		if delErr := si.DeleteStaged(delCtx, entry.Path); delErr != nil {
+			log.Warn().Err(delErr).Str("path", entry.Path).Msg("Failed to delete staged partial")
+		}
+		delCancel()
 		return 0, nil
 	}
 
