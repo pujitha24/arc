@@ -8,6 +8,7 @@ package cluster
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -402,5 +403,28 @@ func TestForwardSendError_KeepsTheMarkerOutOfTheMessage(t *testing.T) {
 	}
 	if msg := wrapped.Error(); strings.Contains(msg, "send failed") || strings.Contains(msg, "\n") {
 		t.Errorf("operator-facing message carries internal bookkeeping: %q", msg)
+	}
+}
+
+// A leader that accepts the connection and then stalls mid-TLS-handshake must
+// not hold the forward after the caller's context is cancelled.
+func TestGetOrDialLeader_CancelInterruptsAStalledHandshake(t *testing.T) {
+	leader := startIdleLeader(t) // accepts and never speaks TLS
+	c := newForwardCoordinator(t)
+	c.tlsConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // test peer
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		leader.waitAccepted(t, 1)
+		cancel()
+	}()
+
+	start := time.Now()
+	_, _, err := c.getOrDialLeader(ctx, "leader-1", leader.addr())
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want errors.Is(context.Canceled)", err)
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Fatalf("took %v; cancellation did not interrupt the handshake", elapsed)
 	}
 }
