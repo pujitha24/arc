@@ -647,3 +647,37 @@ func TestSync_ColdPrefixNeverReachesRows(t *testing.T) {
 		t.Fatalf("fresh node cold rows = %+v, want exactly the logical path %q", rows, gateDailyA)
 	}
 }
+
+// With the cold tier configured but disabled, the query path does not read
+// cold objects, so a cycle must not delete the hot copy of a cold row even
+// though the cold object exists.
+func TestRunCycle_ColdDisabledKeepsHotCopyOfColdRow(t *testing.T) {
+	m, hot, cold, gate, cleanup := setupGatedTest(t)
+	defer cleanup()
+	ctx := context.Background()
+	gate.primary.Store(true)
+	m.config.Cold.Enabled = false
+	partition := time.Date(2024, 3, 15, 0, 0, 0, 0, time.UTC)
+	row := &FileMetadata{Path: gateDailyA, Database: "db1", Measurement: "cpu", PartitionTime: partition, SizeBytes: 7}
+
+	mustWrite(t, hot, gateDailyA)
+	mustWrite(t, cold, gateDailyA)
+	if _, err := m.metadata.RecordColdFile(ctx, row, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := m.runCycle(ctx); err != nil {
+		t.Fatalf("runCycle: %v", err)
+	}
+	if ok, _ := hot.Exists(ctx, gateDailyA); !ok {
+		t.Fatal("cycle deleted the hot copy although cold is disabled and the cold object is unreadable")
+	}
+
+	// Reconciliation itself also refuses to trust a disabled cold backend.
+	if _, deleted, _ := m.migrator.ReconcileOrphanedFiles(ctx); deleted != 0 {
+		t.Fatalf("ReconcileOrphanedFiles deleted %d files with cold disabled", deleted)
+	}
+	if ok, _ := hot.Exists(ctx, gateDailyA); !ok {
+		t.Fatal("hot copy removed with cold disabled")
+	}
+}

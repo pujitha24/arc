@@ -363,9 +363,14 @@ func (m *Manager) runCycle(ctx context.Context) error {
 			totalErrors += errors
 		}
 
-		// Reconcile orphaned hot files (files tracked as cold but still in hot storage)
-		orphansFound, orphansDeleted, orphanErrors = m.migrator.ReconcileOrphanedFiles(ctx)
-		totalErrors += orphanErrors
+		// Reconcile orphaned hot files (files tracked as cold but still in hot
+		// storage). Gated like migration: with cold disabled the query path
+		// does not read cold objects, so deleting the hot copy would leave
+		// the data unreadable.
+		if m.config.Cold.Enabled {
+			orphansFound, orphansDeleted, orphanErrors = m.migrator.ReconcileOrphanedFiles(ctx)
+			totalErrors += orphanErrors
+		}
 
 		// Manifest entries for files already in cold — migrated before the
 		// manifest was kept in step, or whose manifest step failed — keep

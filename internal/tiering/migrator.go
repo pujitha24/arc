@@ -608,7 +608,9 @@ func (m *Migrator) ReconcileOrphanedFiles(ctx context.Context) (orphansFound, de
 		// object first; a row whose cold object is gone goes back to hot so
 		// the primary migrates it again instead of leaving a cold row that
 		// points at nothing.
-		coldBackend := m.manager.GetBackendForTier(TierCold)
+		// ColdBackend, not GetBackendForTier: with cold disabled the query
+		// path will not read the cold object, so it is not a copy to trust.
+		coldBackend := m.manager.ColdBackend()
 		if coldBackend == nil {
 			m.logger.Error().Str("path", file.Path).
 				Msg("Cold backend not available; keeping orphaned hot file since its cold copy cannot be verified")
