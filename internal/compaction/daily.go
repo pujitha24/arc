@@ -253,9 +253,12 @@ func (t *DailyTier) groupDayPartitions(database, measurement string, objects []s
 }
 
 // extractNewestFileTime extracts the newest file creation time from a list of file paths.
-// Supports two formats:
-// - Hourly files: {measurement}_{YYYYMMDD_HHMMSS}_{nanos}.parquet
-// - Daily files: {measurement}_{YYYYMMDD}_daily.parquet
+// Supports these formats:
+//   - Raw files: {measurement}_{YYYYMMDD_HHMMSS}_{nanos}.parquet
+//   - Compacted files: {measurement}_{YYYYMMDD_HHMMSS}_{nanos}_b{N}_{compacted|daily}.parquet
+//     (older: without _b{N}, or without nanos)
+//   - Legacy daily files: {measurement}_{YYYYMMDD}_daily.parquet
+//
 // Returns zero time if no valid timestamps found.
 func extractNewestFileTime(files []string) time.Time {
 	var newest time.Time
@@ -281,6 +284,21 @@ func extractNewestFileTime(files []string) time.Time {
 		if tierSuffix != "" {
 			filename = strings.TrimSuffix(filename, tierSuffix)
 			fileParts := strings.Split(filename, "_")
+			// Batched outputs end in _b{N} before the tier suffix
+			// (measurement_YYYYMMDD_HHMMSS_nanos_bN_compacted); drop it so the
+			// remaining parts parse like the nanos form.
+			if n := len(fileParts); n > 0 && isBatchSegment(fileParts[n-1]) {
+				fileParts = fileParts[:n-1]
+			}
+			// Legacy daily form: measurement_YYYYMMDD_daily
+			if n := len(fileParts); n >= 2 {
+				if d, err := time.Parse("20060102", fileParts[n-1]); err == nil {
+					if d.After(newest) {
+						newest = d
+					}
+					continue
+				}
+			}
 			if len(fileParts) < 3 {
 				continue
 			}
@@ -321,6 +339,19 @@ func extractNewestFileTime(files []string) time.Time {
 	}
 
 	return newest
+}
+
+// isBatchSegment reports whether s is a batch-number segment: "b" followed by digits.
+func isBatchSegment(s string) bool {
+	if len(s) < 2 || s[0] != 'b' {
+		return false
+	}
+	for _, r := range s[1:] {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // isHourLevelFile reports whether a storage path names an HOUR-level file —
