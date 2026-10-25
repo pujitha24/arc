@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -1073,4 +1074,15 @@ func TestConvertColumnsToTyped_TimeForcedInt64(t *testing.T) {
 			t.Fatal("expected error for null time, got nil (would route to 1970 partition)")
 		}
 	})
+}
+
+func TestFlushFailureMsg(t *testing.T) {
+	b := &ArrowBuffer{}
+	if got := b.flushFailureMsg("Flush failed"); strings.Contains(got, "preserved in WAL") {
+		t.Errorf("WAL disabled: message claims preservation: %q", got)
+	}
+	b.wal = &checkpointRecordingWAL{}
+	if got := b.flushFailureMsg("Flush failed"); !strings.Contains(got, "preserved in WAL") {
+		t.Errorf("WAL enabled: message should say preserved: %q", got)
+	}
 }

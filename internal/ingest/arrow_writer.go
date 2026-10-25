@@ -1752,6 +1752,15 @@ func (b *ArrowBuffer) closeDeadlineBudget() time.Duration {
 	return 30 * time.Second
 }
 
+// flushFailureMsg words a flush-failure log line truthfully: rows are only
+// recoverable when a WAL copy exists; with the WAL off they are dropped.
+func (b *ArrowBuffer) flushFailureMsg(prefix string) string {
+	if b.wal == nil {
+		return prefix + " - WAL is disabled, buffered rows were dropped and will not be retried"
+	}
+	return prefix + " - data preserved in WAL for recovery"
+}
+
 func (b *ArrowBuffer) markFlushFailure() {
 	b.totalErrors.Add(1)
 	b.flushFailureGeneration.Add(1)
@@ -4399,7 +4408,7 @@ func (b *ArrowBuffer) flushRecordsAsync(ctx context.Context, bufferKey, database
 			Err(err).
 			Str("buffer_key", bufferKey).
 			Int("records", recordCount).
-			Msg("Failed to flush - data preserved in WAL for recovery")
+			Msg(b.flushFailureMsg("Failed to flush"))
 		b.markFlushFailure()
 		group.failed()
 		// Data is already in WAL (written at ingest time) - no memory growth
@@ -4706,7 +4715,7 @@ func (b *ArrowBuffer) flushPartSync(ctx context.Context, bufferKey, database, me
 		b.markFlushFailure()
 		p.group.failed()
 		b.logger.Warn().Err(err).Str("buffer_key", bufferKey).Int("records", p.rows).
-			Msg("Flush failed - data preserved in WAL for recovery")
+			Msg(b.flushFailureMsg("Flush failed"))
 		return err
 	}
 	b.completeFlush(p.walHashes, p.group)
@@ -4805,7 +4814,7 @@ func (b *ArrowBuffer) flushBufferLocked(ctx context.Context, shard *bufferShard,
 			Err(err).
 			Str("buffer_key", bufferKey).
 			Int("records", recordCount).
-			Msg("Flush failed - data preserved in WAL for recovery")
+			Msg(b.flushFailureMsg("Flush failed"))
 		// Data is already in WAL (written at ingest time) - no need to restore to buffer
 		// This prevents memory growth during prolonged S3 outages
 		// WAL will be replayed on restart or via periodic recovery
