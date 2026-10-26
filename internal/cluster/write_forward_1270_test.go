@@ -215,7 +215,7 @@ func TestAPIHostPort(t *testing.T) {
 	} {
 		n := NewNode("w", "w", RoleWriter, "c")
 		n.SetAddresses(c.coord, c.api)
-		if got := apiHostPort(n); got != c.want {
+		if got := APIHostPort(n); got != c.want {
 			t.Errorf("api %q coord %q -> %q, want %q", c.api, c.coord, got, c.want)
 		}
 	}

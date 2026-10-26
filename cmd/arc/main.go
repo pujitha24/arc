@@ -4023,12 +4023,12 @@ func main() {
 					)
 
 					// Build via *url.URL so an IPv6 literal in
-					// n.APIAddress (e.g. "[::1]:8000") survives
+					// the peer address (e.g. "[::1]:8000") survives
 					// unmangled. CacheInvalidatePath is a known-safe
 					// constant path, so we don't need to escape it.
 					peerURL := (&url.URL{
 						Scheme: clusterScheme,
-						Host:   n.APIAddress,
+						Host:   cluster.APIHostPort(n),
 						Path:   api.CacheInvalidatePath,
 					}).String()
 					req, err := http.NewRequestWithContext(ctx, http.MethodPost, peerURL, nil)
