@@ -24,7 +24,7 @@ class Lifecycle(Matrix):
         if getattr(self.args,'iceberg',False) and cluster_name in ('license0','license1','license2'):
             env.update(ARC_ICEBERG_ENABLED='true',ARC_ICEBERG_RECONCILE_INTERVAL='1')
             if cluster_name=='license0':env.update(ARC_ICEBERG_WAREHOUSE='s3://license0-hot/exports',ARC_ICEBERG_CATALOG_DB_PATH='/app/data/iceberg-original.db')
-            if cluster_name=='license2':env.update(ARC_ICEBERG_WAREHOUSE='/app/data/storage/custom-export',ARC_ICEBERG_CATALOG_DB_PATH='/app/data/iceberg-original.db')
+            if cluster_name=='license2':env.update(ARC_ICEBERG_WAREHOUSE='file:///app/data/storage/custom-export',ARC_ICEBERG_CATALOG_DB_PATH='/app/data/iceberg-original.db')
         return env
 
     def iceberg_exact(self,node,location,expected):
