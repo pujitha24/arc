@@ -26,6 +26,10 @@ func newTestClient(t *testing.T, serverURL, cacheDir string) *Client {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Legacy protocol fixtures intentionally omit signed time; authority tests
+	// explicitly exercise the mandatory production clock contract.
+	c.requireAuthorityTime = false
+	c.policyProtocol = 0
 	c.serverURL = serverURL
 	c.httpClient.Timeout = 2 * time.Second
 	return c

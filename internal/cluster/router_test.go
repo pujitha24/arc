@@ -40,6 +40,18 @@ func TestRouterRouteWriteNoWriters(t *testing.T) {
 	}
 }
 
+func TestLicenseRouterReturnsUnavailableWhenAllHealthyWritersAreFenced(t *testing.T) {
+	registry := newTestRegistry()
+	w := NewNode("spare", "Spare", RoleWriter, "test-cluster")
+	w.UpdateState(StateHealthy)
+	registry.Register(w)
+	r := NewRouter(&RouterConfig{Registry: registry, Allowed: func(string) bool { return false }, Logger: zerolog.Nop()})
+	node, err := r.writeTarget()
+	if node != nil || err != ErrNoWriterAvailable {
+		t.Fatalf("fenced writer route: %v %v", node, err)
+	}
+}
+
 func TestRouterRouteWriteLocalCanHandle(t *testing.T) {
 	registry := newTestRegistry()
 	localNode := NewNode("writer-1", "Writer", RoleWriter, "test-cluster")
