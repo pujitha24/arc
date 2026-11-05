@@ -93,6 +93,15 @@ the authenticated membership-removal route remains available for reconciliation.
 Retained metadata is not deleted.
 Retained shared-storage mode without its feature grant also stays fenced and
 enters the safe standalone handoff; a recovery exception cannot authorize it.
+
+When Iceberg export is configured, the OSS generation uses an independent catalog
+beside its sealed storage and a local warehouse under that storage root. The
+predecessor catalog and warehouse remain unchanged; their snapshots do not become
+the publication target for later OSS writes. This avoids reopening absolute local
+or S3 metadata locations against a different backend or credentials context.
+Startup logs the new warehouse. Directory readers must explicitly switch to it
+and have access to the selected node's local data. Each retained node keeps its
+own OSS export history, just as it keeps its own OSS writes.
 Reactivation of a sealed OSS owner restores supported standalone features; it
 does not automatically merge divergent OSS namespaces or rebuild the former
 multi-node cluster. That inverse reconciliation remains separate work.

@@ -323,14 +323,10 @@ func main() {
 			// These are effective settings only. Operator configuration, old Raft,
 			// metadata, journals and WAL remain intact for inspection/recovery.
 			log.Warn().Str("selected_owner", licenseBootstrap.SelectedOwner()).Str("original_owner", record.Owner).Msg("Expired cluster configuration retained: this boot uses the selected node's preserved OSS state; node-local OSS changes on other nodes remain there")
-			cfg.Cluster.Enabled = false
-			cfg.Cluster.SharedStorageMode = false
-			cfg.Cluster.Role = "standalone"
-			cfg.Storage.Backend = "local"
-			cfg.Storage.LocalPath = localPrepared.StoragePath
-			cfg.WAL.Directory = localPrepared.WALPath
-			cfg.Database.TempDirectory = filepath.Join(filepath.Dir(localPrepared.StoragePath), "query-temp")
-			cfg.Compaction.TempDirectory = filepath.Join(filepath.Dir(localPrepared.StoragePath), "compaction-temp")
+			configureLicenseOSSPaths(cfg, localPrepared)
+			if cfg.Iceberg.Enabled {
+				log.Warn().Str("catalog", cfg.Iceberg.CatalogDBPath).Str("warehouse", cfg.Iceberg.Warehouse).Msg("OSS generation uses an independent Iceberg catalog and warehouse; predecessor export metadata is retained. Directory readers must use the new warehouse and have access to this node's local data")
+			}
 			log.Warn().Str("owner", record.Owner).Uint64("generation", record.Generation).Msg("License lifecycle selected standalone OSS runtime; predecessor Raft will not start")
 		}
 	}

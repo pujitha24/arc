@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 import socket
 import secrets
+import sqlite3
 import threading
 import time
 
@@ -20,7 +21,26 @@ class Lifecycle(Matrix):
             env.update(ARC_CLUSTER_SHARED_STORAGE_MODE='true',ARC_STORAGE_BACKEND='s3',ARC_STORAGE_S3_BUCKET='license0-hot',
                        ARC_STORAGE_S3_REGION='us-east-1',ARC_STORAGE_S3_ENDPOINT='http://cold-store:8333',ARC_STORAGE_S3_ACCESS_KEY='local-test',
                        ARC_STORAGE_S3_SECRET_KEY='local-test',ARC_STORAGE_S3_USE_SSL='false',ARC_STORAGE_S3_PATH_STYLE='true')
+        if getattr(self.args,'iceberg',False) and cluster_name in ('license0','license1','license2'):
+            env.update(ARC_ICEBERG_ENABLED='true',ARC_ICEBERG_RECONCILE_INTERVAL='1')
+            if cluster_name=='license0':env.update(ARC_ICEBERG_WAREHOUSE='s3://license0-hot/exports',ARC_ICEBERG_CATALOG_DB_PATH='/app/data/iceberg-original.db')
+            if cluster_name=='license2':env.update(ARC_ICEBERG_WAREHOUSE='/app/data/storage/custom-export',ARC_ICEBERG_CATALOG_DB_PATH='/app/data/iceberg-original.db')
         return env
+
+    def iceberg_exact(self,node,location,expected):
+        result=self.docker('exec',node,'/app/iceberg-audit',location,'http://cold-store:8333',check=False,timeout=45)
+        if result.returncode!=0:return False
+        try:ids=json.loads(result.stdout)['ids']
+        except (ValueError,KeyError):return False
+        return len(ids)==len(set(ids))==len(expected) and set(ids)==set(expected)
+
+    def retained_iceberg_catalogs(self,p):
+        result={}
+        for n in p['nodes']:
+            path=Path(self.nodes[n]['data'])/('arc.db' if p['id']=='license1' else 'iceberg-original.db')
+            with sqlite3.connect('file:'+str(path)+'?mode=ro',uri=True) as db:
+                result[n]=db.execute('SELECT table_namespace,table_name,metadata_location FROM iceberg_tables ORDER BY table_namespace,table_name').fetchall()
+        return result
 
     def start_node(self,install,role,env,image=None,extra=(),cluster_role=None):
         node=super().start_node(install,role,env,image,extra,cluster_role,node_id='' if getattr(self.args,'auto_node_ids',False) else None)
@@ -119,6 +139,13 @@ class Lifecycle(Matrix):
         p['oss_ids'].setdefault(owner,set()).update(self.expected_ids[p['id']]-before)
         self.private(self.state/'all-acknowledged-ids-by-node.private.json',json.dumps({p['id']:{n:sorted(ids) for n,ids in p.get('oss_ids',{}).items()} for p in self.profiles},indent=2))
         self.record(label+':oss_write_read' ,self.until(lambda:self.exact(p)))
+        if getattr(self.args,'iceberg',False):
+            prepared=json.loads((Path(self.nodes[owner]['data'])/'raft/license-lifecycle.json.prepared').read_text())
+            location='file://'+prepared['storage_path']+'/.arc-iceberg-warehouse/arc_license_test.db/events'
+            self.record(label+':independent_iceberg_reader_sees_post_handoff_writes',self.until(lambda:self.iceberg_exact(owner,location,self.expected_ids[p['id']]),timeout=60))
+            catalogs=self.retained_iceberg_catalogs(p)
+            if 'old_iceberg_catalogs' not in p:p['old_iceberg_catalogs']=catalogs
+            self.record(label+':predecessor_iceberg_catalogs_unchanged',p['old_iceberg_catalogs']==catalogs)
         files=[]
         for node in p['nodes']:
             data=Path(self.nodes[node]['data'])
@@ -174,6 +201,11 @@ class Lifecycle(Matrix):
                     self.nodes[n]['cluster_role']='reader' if self.nodes[n]['role'].startswith('r') else ('writer' if p['id']=='license0' or self.nodes[n]['role'] in ('w1','w2') else 'compactor')
                     self.baselines[n]=self.storage_snapshot(n)
                 self.record('baseline_exact_ids',self.until(lambda:self.exact(p)))
+                if getattr(self.args,'iceberg',False):
+                    if p['id']=='license0':location='s3://license0-hot/exports/arc_license_test.db/events'
+                    elif p['id']=='license1':location='file:///app/data/storage/arc_license_test.db/events'
+                    else:location='file:///app/data/storage/custom-export/arc_license_test.db/events'
+                    self.record('independent_iceberg_reader_before_expiry',self.until(lambda:any(self.iceberg_exact(n,location,self.expected_ids[p['id']]) for n in p['nodes']),timeout=60))
             term=dt.date.fromisoformat(self.args.term_date)
             paid=[p for p in self.profiles if p['license_kind']=='paid'];trial=[p for p in self.profiles if p['license_kind']=='trial'][0]
             for day in (8,9,10,14):
@@ -277,6 +309,7 @@ def main():
     parser.add_argument('--authority-image',default='arc-license-lifecycle-authority:local');parser.add_argument('--subnet-base',type=int,default=164)
     parser.add_argument('--shared-unlimited',action='store_true');parser.add_argument('--auto-node-ids',action='store_true')
     parser.add_argument('--crash-before-release',action='store_true')
+    parser.add_argument('--iceberg',action='store_true')
     parser.add_argument('--audit-binary',required=True,help='Path to the read-only Go ACK auditor binary')
     parser.add_argument('--resume',action='store_true');args=parser.parse_args()
     if args.resume:raise RuntimeError('lifecycle acceptance requires a new isolated project')

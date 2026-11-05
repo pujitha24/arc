@@ -39,6 +39,9 @@ reconciled, including aggregate cores and shared-storage capability. Local seal
 durability does not authorize leaving Raft until all participants persist it.
 Final drains join live MQTT admissions and actual tiering work and
 materialize current auth/RBAC revocations before sealing.
+Configured Iceberg export uses a separate catalog and warehouse for the OSS
+generation. Predecessor metadata is retained, and directory readers must switch
+to the logged new warehouse with access to the selected node's local files.
 
 Accelerated Docker acceptance covers two paid profiles and one trial, shared S3
 and local hot storage, generated IDs, repeated OSS restarts, and injected

@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -30,6 +31,45 @@ func TestLicensePreparedIdentitySurvivesGeneratedProcessID(t *testing.T) {
 	local.Controller = "another-controller"
 	if prepareLicenseOSSConfig(cfg, canonical, &local) == nil {
 		t.Fatal("accepted incompatible certificate")
+	}
+}
+
+func TestLicenseOSSPathsIsolateIcebergMetadata(t *testing.T) {
+	for _, warehouse := range []string{"", "file:///old/data/custom-warehouse", "s3://old-bucket/exports"} {
+		t.Run(warehouse, func(t *testing.T) {
+			root := t.TempDir()
+			oldCatalog := filepath.Join(root, "old-catalog.db")
+			if err := os.WriteFile(oldCatalog, []byte("retained predecessor catalog"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			cfg := &config.Config{}
+			cfg.ConfigFile = "/etc/arc/original.toml"
+			cfg.Auth.DBPath = oldCatalog
+			cfg.Iceberg.Enabled = true
+			cfg.Iceberg.Warehouse = warehouse
+			cfg.Iceberg.CatalogDBPath = oldCatalog
+			cfg.Iceberg.NamespacePrefix = "custom"
+			cfg.Iceberg.RetainSnapshots = 7
+			record := &cluster.LicenseBootRecord{StoragePath: filepath.Join(root, "generation", "storage"), WALPath: filepath.Join(root, "generation", "wal")}
+			configureLicenseOSSPaths(cfg, record)
+			if cfg.Iceberg.CatalogDBPath == oldCatalog || !strings.HasPrefix(cfg.Iceberg.CatalogDBPath, filepath.Dir(record.StoragePath)+string(filepath.Separator)) {
+				t.Fatal("new exporter reused predecessor catalog")
+			}
+			u, err := url.Parse(cfg.Iceberg.Warehouse)
+			uriRoot := filepath.ToSlash(record.StoragePath)
+			if !strings.HasPrefix(uriRoot, "/") {
+				uriRoot = "/" + uriRoot
+			}
+			if err != nil || u.Scheme != "file" || !strings.HasPrefix(u.Path, uriRoot+"/") {
+				t.Fatalf("warehouse is not bound to current local namespace: %q", cfg.Iceberg.Warehouse)
+			}
+			if data, err := os.ReadFile(oldCatalog); err != nil || string(data) != "retained predecessor catalog" {
+				t.Fatal("predecessor metadata was modified")
+			}
+			if cfg.Auth.DBPath != oldCatalog || cfg.ConfigFile != "/etc/arc/original.toml" || cfg.Iceberg.NamespacePrefix != "custom" || cfg.Iceberg.RetainSnapshots != 7 {
+				t.Fatal("unrelated configuration was lost")
+			}
+		})
 	}
 }
 

@@ -68,7 +68,7 @@ def main():
         shutil.rmtree(source)
     source.mkdir(mode=0o700)
     for raw_path in subprocess.check_output(["git", "ls-files", "-z"], cwd=ROOT).decode().split('\0'):
-        if not raw_path or not (raw_path.startswith(('cmd/', 'internal/')) or raw_path in ('go.mod', 'go.sum')):
+        if not raw_path or not (raw_path.startswith(('cmd/', 'internal/', 'scripts/license_docker/iceberg_audit/')) or raw_path in ('go.mod', 'go.sum')):
             continue
         src = ROOT / raw_path
         if src.is_file():
@@ -85,8 +85,10 @@ RUN rm -rf /build/internal /build/cmd
 COPY source/ /build/
 COPY pubkey.go client.go slow.json fast.json /overlay/
 RUN go build -overlay=/overlay/${CADENCE}.json -tags=duckdb_arrow -ldflags="-X main.Version=license-authority-fixture" -o /build/arc-fixture ./cmd/arc
+RUN go build -o /build/iceberg-audit ./scripts/license_docker/iceberg_audit
 FROM ${RUNTIME_IMAGE}
 COPY --from=build --chown=arc:arc /build/arc-fixture /app/arc
+COPY --from=build --chown=arc:arc /build/iceberg-audit /app/iceberg-audit
 LABEL arc.license-test-only="true"
 ''')
     revision = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()

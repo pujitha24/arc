@@ -128,6 +128,12 @@ with two and three voters. Natural-expiry soak and production activation-server
 integration remain separate verification boundaries.
 See [the protocol and implementation status](docs/license-lifecycle.md).
 
+**Iceberg after final OSS handoff:** the new generation publishes through an
+independent local catalog and warehouse. Predecessor catalogs, warehouses and
+snapshots remain retained; they are not silently rebound to another backend.
+Directory readers must use the new warehouse logged at startup and have access
+to the selected node's local data. Subsequent OSS writes advance that new export.
+
 ## Fix: Iceberg export counts each row once during a DELETE or a compaction ([#939](https://github.com/Basekick-Labs/arc/issues/939))
 
 Arc's queries leave out a file whose rows another file already holds, such as

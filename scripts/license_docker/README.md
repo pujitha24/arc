@@ -118,6 +118,11 @@ the configured node IDs empty and checks the generated participant identities.
 path with an empty directory, asserts that no Raft-off boot authority is issued,
 kills only the fixture controller, removes the blocker and restarts it. The
 subsequent assertions require actual recovery and a completed single-OSS handoff.
+`--iceberg` adds independent directory-table readers before expiry and after OSS
+writes/restarts. It covers an S3 warehouse, an explicit local warehouse and the
+default local warehouse, and checks that predecessor catalog rows stay unchanged.
+The test-only image includes `iceberg-audit`, which resolves version hints and
+plans live files through Apache Iceberg before reading their records with DuckDB.
 
 All accelerated lifecycle images overlay only the test trust key and validation
 cadence. The lifecycle logic is the production code, without date overrides.
